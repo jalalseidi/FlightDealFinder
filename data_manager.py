@@ -1,5 +1,8 @@
 import requests
 
+import flight_search
+from flight_search import FlightSearch
+
 SHEETY_URL = "https://api.sheety.co/a1776bed53430a67045c94021b85d79f/flightDeals/prices"
 
 class DataManager:
@@ -7,27 +10,36 @@ class DataManager:
         self.sheety_url = SHEETY_URL
         self.data = []
 
-    def get_data(self):
-        """Fetches data from the Google Sheet via Sheety API."""
-        response = requests.get(self.sheety_url)
-        if response.status_code == 200:
-            self.data = response.json().get("prices", [])  # Get "prices" list safely
-            return self.data
-        else:
-            print(f"❌ Error fetching data: {response.status_code}, {response.text}")
-            return None
+    def get_destination_data(self):
+        # Use the Sheety API to GET all the data in that sheet and print it out.
+        response = requests.get(url=SHEETY_URL)
+        data = response.json()
+        self.destination_data = data["prices"]
+        # Try importing pretty print and printing the data out again using pprint() to see it formatted.
+        # pprint(data)
+        return self.destination_data
 
-    def update_data(self, row_id, updated_info):
-        """Updates a specific row in the Google Sheet using Sheety API."""
-        new_data = {"price": updated_info}  # ✅ Ensure correct JSON format for Sheety API
+        # In the DataManager Class make a PUT request and use the row id from sheet_data
+        # to update the Google Sheet with the IATA codes. (Do this using code).
 
-        response = requests.put(
-            url=f"{self.sheety_url}/{row_id}",
-            json=new_data,
-        )
+    def update_destination_codes(self):
+        flight_search_instance = FlightSearch()
+        for city in self.destination_data:
+            if city["iataCode"] == "ERROR" or city["iataCode"] == "" or city["iataCode"] == "N/A":
+                print(f"Updating IATA code for {city['city']}...")  # Debugging
+                new_code = flight_search_instance.get_destination_code(city["city"])
+                city["iataCode"] = new_code  # Update the local data
 
-        if response.status_code == 200:
-            print(f"✅ Successfully updated row {row_id} with {updated_info}")
-        else:
-            print(f"❌ Error updating row {row_id}: {response.status_code}, {response.text}")
+                new_data = {
+                    "price": {
+                        "iataCode": new_code
+                    }
+                }
+                response = requests.put(
+                    url=f"{SHEETY_URL}/{city['id']}",
+                    json=new_data
+                )
+                print(f"Updated {city['city']} with IATA code {new_code}. Response: {response.text}")
+
+
 

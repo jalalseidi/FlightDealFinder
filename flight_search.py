@@ -1,7 +1,6 @@
 import requests
 import os
-from datetime import datetime, timedelta
-from flight_data import FlightData
+from datetime import datetime
 
 
 IATA_ENDPOINT = "https://test.api.amadeus.com/v1/reference-data/locations/cities"
@@ -34,82 +33,85 @@ class FlightSearch:
 
         response = requests.post(url=TOKEN_URL, headers=headers, data=body)
 
-        if response.status_code == 200:
-            token_data = response.json()
-            self.token = token_data.get("access_token")
-            self.token_expires = datetime.now() + timedelta(seconds=token_data.get("expires_in", 3600))
-            return self.token
-        else:
-            print(f"❌ Error fetching token: {response.status_code}, {response.text}")
-            return None
+        # New bearer token. Typically expires in 1799 seconds (30min)
+        print(f"Your token is {response.json()['access_token']}")
+        print(f"Your token expires in {response.json()['expires_in']} seconds")
+        return response.json()['access_token']
 
-
-    def get_iata_code(self, city_name):
-        """Gets the IATA code for a given city using Amadeus API."""
-        if not self.token:
-            print("❌ No API token. Cannot fetch IATA code.")
-            return "ERROR"
-
-        print(f"🔍 Fetching IATA code for {city_name}...")
-        headers = {"Authorization": f"Bearer {self.token}"}
-        params = {"keyword": city_name, "max": 1}
-
-        response = requests.get(url=IATA_ENDPOINT, headers=headers, params=params)
-
-        if response.status_code == 200:
-            try:
-                code = response.json()["data"][0]["iataCode"]
-                print(f"✅ IATA Code for {city_name}: {code}")
-                return code
-            except (IndexError, KeyError):
-                print(f"⚠️ No IATA code found for {city_name}.")
-                return "N/A"
-        else:
-            print(f"❌ API Request Failed: {response.status_code}, {response.text}")
-            return "ERROR"
-
-    def find_cheapest_flight(self, destination_iata):
-        """Finds the cheapest non-stop round-trip flight to a given destination."""
-        if not self.token:
-            print("❌ No API token. Cannot search for flights.")
-            return FlightData(price="N/A", origin_airport="N/A", destination_airport="N/A",
-                              out_date="N/A", return_date="N/A")
-
-        # Set up date range (tomorrow to 6 months later)
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        six_months_later = (datetime.now() + timedelta(days=180)).strftime("%Y-%m-%d")
+    def get_destination_code(self, city_name):
+        print(f"Fetching IATA code for {city_name}...")  # Debugging
 
         headers = {"Authorization": f"Bearer {self.token}"}
-        params = {
-            "originLocationCode": ORIGIN_CITY_IATA,
-            "destinationLocationCode": destination_iata,
-            "departureDate": tomorrow,
-            "returnDate": six_months_later,
+        query = {
+            "keyword": city_name,
+            "max": "2",
+            "include": "AIRPORTS",
+        }
+        response = requests.get(
+            url=IATA_ENDPOINT,
+            headers=headers,
+            params=query
+        )
+
+        print(f"Response for {city_name}: {response.status_code} - {response.text}")  # Debugging
+
+        try:
+            code = response.json()["data"][0]['iataCode']
+            return code
+        except IndexError:
+            print(f"❌ IndexError: No airport code found for {city_name}.")
+            return "N/A"
+        except KeyError:
+            print(f"❌ KeyError: No airport code found for {city_name}.")
+            return "Not Found"
+
+    def check_flights(self, origin_city_code, destination_city_code, from_time, to_time):
+        """
+        Searches for flight options between two cities on specified departure and return dates
+        using the Amadeus API.
+
+        Parameters:
+            origin_city_code (str): The IATA code of the departure city.
+            destination_city_code (str): The IATA code of the destination city.
+            from_time (datetime): The departure date.
+            to_time (datetime): The return date.
+
+        Returns:
+            dict or None: A dictionary containing flight offer data if the query is successful; None
+            if there is an error.
+
+        The function constructs a query with the flight search parameters and sends a GET request to
+        the API. It handles the response, checking the status code and parsing the JSON data if the
+        request is successful. If the response status code is not 200, it logs an error message and
+        provides a link to the API documentation for status code details.
+        """
+
+        # print(f"Using this token to check_flights() {self._token}")
+        headers = {"Authorization": f"Bearer {self.token}"}
+        query = {
+            "originLocationCode": origin_city_code,
+            "destinationLocationCode": destination_city_code,
+            "departureDate": from_time.strftime("%Y-%m-%d"),
+            "returnDate": to_time.strftime("%Y-%m-%d"),
             "adults": 1,
-            "nonStop": True,
-            "currencyCode": CURRENCY,
-            "max": 1  # Get only the cheapest option
+            "nonStop": "true",
+            "currencyCode": "GBP",
+            "max": "10",
         }
 
-        response = requests.get(url=FLIGHT_SEARCH_URL, headers=headers, params=params)
+        response = requests.get(
+            url=FLIGHT_ENDPOINT,
+            headers=headers,
+            params=query,
+        )
 
-        if response.status_code == 200:
-            try:
-                data = response.json()["data"][0]  # Get first (cheapest) flight
-                price = data["price"]["total"]
-                departure_airport = data["itineraries"][0]["segments"][0]["departure"]["iataCode"]
-                arrival_airport = data["itineraries"][0]["segments"][0]["arrival"]["iataCode"]
-                out_date = data["itineraries"][0]["segments"][0]["departure"]["at"].split("T")[0]
-                return_date = data["itineraries"][0]["segments"][-1]["arrival"]["at"].split("T")[0]
+        if response.status_code != 200:
+            print(f"check_flights() response code: {response.status_code}")
+            print("There was a problem with the flight search.\n"
+                  "For details on status codes, check the API documentation:\n"
+                  "https://developers.amadeus.com/self-service/category/flights/api-doc/flight-offers-search/api"
+                  "-reference")
+            print("Response body:", response.text)
+            return None
 
-                return FlightData(price=price, origin_airport=departure_airport,
-                                  destination_airport=arrival_airport,
-                                  out_date=out_date, return_date=return_date)
-            except (IndexError, KeyError):
-                print(f"⚠️ No flights found for {destination_iata}.")
-                return FlightData(price="N/A", origin_airport="N/A", destination_airport="N/A",
-                                  out_date="N/A", return_date="N/A")
-        else:
-            print(f"❌ API Error: {response.status_code}, {response.text}")
-            return FlightData(price="N/A", origin_airport="N/A", destination_airport="N/A",
-                              out_date="N/A", return_date="N/A")
+        return response.json()
